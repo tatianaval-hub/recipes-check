@@ -3,88 +3,83 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Книга рецептов — просмотр</title>
-<style>body{font:17px system-ui;margin:0;background:#f8f6f1;color:#252525}main{max-width:850px;margin:30px auto;padding:20px}input,button{box-sizing:border-box;font:inherit;padding:12px;border:1px solid #ccc;border-radius:8px}input{display:block;width:100%;margin:8px 0 16px}button{cursor:pointer;background:#a43e28;color:white}button:disabled{opacity:.5}#status{white-space:pre-wrap;padding:16px;background:white;border-radius:8px}label{display:block}[hidden]{display:none!important}#recipes{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;padding:0;list-style:none}article{height:100%;box-sizing:border-box;padding:18px;background:white;border:1px solid #ddd;border-radius:12px}h3{overflow-wrap:anywhere}dialog{width:min(700px,90vw);box-sizing:border-box;border:0;border-radius:14px;padding:24px;max-height:90vh;overflow:auto}dialog::backdrop{background:#0008}.recipe-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}.close{float:right;margin-left:10px}#detailStatus{white-space:pre-wrap}</style>
-<main>
-<h1>Книга рецептов</h1>
-<p>Проверка карточек и полного текста. Только просмотр, данные не изменяются.</p>
+<style>body{font:17px system-ui;margin:0;background:#f8f6f1;color:#252525}main{max-width:850px;margin:30px auto;padding:20px}input,button{box-sizing:border-box;font:inherit;padding:12px;border:1px solid #ccc;border-radius:8px}input{display:block;width:100%;margin:8px 0 16px}button{cursor:pointer;background:#a43e28;color:white}button:disabled{opacity:.5}#status{white-space:pre-wrap;padding:16px;background:white;border-radius:8px}label{display:block}[hidden]{display:none!important}#recipes{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;padding:0;list-style:none}article{padding:18px;background:white;border:1px solid #ddd;border-radius:12px}h3{overflow-wrap:anywhere}dialog{width:min(700px,90vw);box-sizing:border-box;border:0;border-radius:14px;padding:24px;max-height:90vh;overflow:auto}dialog::backdrop{background:#0008}.recipe-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}.close{float:right;margin-left:10px}#detailStatus{white-space:pre-wrap}</style>
+<main><h1>Книга рецептов</h1><p>Версия 3: выборочные поля, кэш в памяти и замеры времени. Только просмотр.</p>
 <p id="status" role="status">HTML загружен. Ожидание JavaScript…</p>
-<form id="login">
-<label>E-mail<input id="email" type="email" autocomplete="username" required></label>
-<label>Пароль<input id="password" type="password" autocomplete="current-password" required></label>
-<button id="submit">Войти и прочитать рецепты</button>
-</form>
-<section id="result" hidden><h2>Рецепты</h2><p id="summary"></p><ul id="recipes"></ul><button id="logout" type="button">Закрыть тестовую сессию</button></section>
-<noscript>Для проверки входа включите JavaScript.</noscript>
-</main>
+<form id="login"><label>E-mail<input id="email" type="email" autocomplete="username" required></label><label>Пароль<input id="password" type="password" autocomplete="current-password" required></label><button id="submit">Войти и прочитать рецепты</button></form>
+<section id="result" hidden><h2>Рецепты</h2><p id="summary"></p><ul id="recipes"></ul><button id="logout" type="button">Закрыть тестовую сессию</button></section><noscript>Включите JavaScript.</noscript></main>
 <dialog id="detail" aria-labelledby="detailTitle"><button class="close" id="close" type="button">Закрыть</button><h2 id="detailTitle">Рецепт</h2><p id="detailStatus" role="status"></p><div id="detailBody"></div></dialog>
 <script>
 'use strict';
-const base='https://ybkfrftifgpntfppqudd.supabase.co';
-const key='sb_publishable_GVUJTtt6xO5HCWRH6_62fw_8GuC2oRd';
-const $=id=>document.getElementById(id);
+const base='https://ybkfrftifgpntfppqudd.supabase.co',key='sb_publishable_GVUJTtt6xO5HCWRH6_62fw_8GuC2oRd';
+const $=id=>document.getElementById(id),cache=new Map(),pending=new Map(),controllers=new Set();
+const fields='id,title,category,cooking_time,servings,description,ingredients,steps,notes,source_url';
 let token=null,epoch=0,detailRequest=0;
+const seconds=ms=>(ms/1000).toFixed(2)+' с';
 function status(text){$('status').textContent=text;}
-async function request(path,options={}){
- const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
+function reset(){epoch++;token=null;cache.clear();pending.clear();for(const c of controllers)c.abort();controllers.clear();}
+async function request(path,options={},timing={}){
+ const controller=new AbortController();controllers.add(controller);
+ const start=performance.now();let phase='ожидание заголовков ответа',timeout=false;
+ const timer=setTimeout(()=>{timeout=true;controller.abort();},25000);
  try{
   const response=await fetch(base+path,{...options,signal:controller.signal,cache:'no-store'});
-  const text=await response.text();let data;
+  const headersAt=performance.now();timing.headers=headersAt-start;phase='чтение тела ответа';
+  const text=await response.text(),bodyAt=performance.now();timing.body=bodyAt-headersAt;phase='разбор JSON';let data;
   try{data=text?JSON.parse(text):null;}catch{throw new Error('Ответ не является JSON. HTTP '+response.status);}
+  timing.parse=performance.now()-bodyAt;
   if(!response.ok)throw new Error('HTTP '+response.status+': '+(data?.msg||data?.message||data?.error_description||data?.error||'Ошибка запроса'));
   return data;
- }catch(error){if(error.name==='AbortError')throw new Error('Сервер не завершил ответ за 25 секунд.');throw error;}
- finally{clearTimeout(timer);}
+ }catch(error){if(error.name==='AbortError')throw new Error(timeout?'Запрос прерван страницей через 25 секунд. Этап: '+phase+'.':'Запрос отменён при закрытии сессии.');throw error;}
+ finally{clearTimeout(timer);controllers.delete(controller);timing.total=performance.now()-start;}
 }
 function section(title,value){
- const heading=document.createElement('h3'),text=document.createElement('p');
- heading.textContent=title;text.className='recipe-text';
- text.textContent=value==null||value===''?'Не указано':typeof value==='string'?value:JSON.stringify(value,null,2);
- $('detailBody').append(heading,text);
+ const heading=document.createElement('h3'),text=document.createElement('p');heading.textContent=title;text.className='recipe-text';
+ text.textContent=value==null||value===''?'Не указано':typeof value==='string'?value:JSON.stringify(value,null,2);$('detailBody').append(heading,text);
+}
+function render(r){
+ $('detailBody').replaceChildren();$('detailTitle').textContent=r.title||'Без названия';
+ section('Категория',r.category);section('Время приготовления',r.cooking_time==null?null:r.cooking_time+' мин.');
+ section('Порций',r.servings);section('Описание',r.description);section('Ингредиенты',r.ingredients);section('Приготовление',r.steps);section('Личная заметка',r.notes);section('Источник',r.source_url);
+}
+function loadRecipe(id){
+ if(pending.has(id))return pending.get(id);
+ const sessionEpoch=epoch,accessToken=token,timing={};
+ const query=new URLSearchParams({select:fields,id:'eq.'+id,limit:'1'});
+ const promise=request('/rest/v1/recipes?'+query,{headers:{apikey:key,Authorization:'Bearer '+accessToken}},timing).then(rows=>{
+  if(!Array.isArray(rows)||!rows.length)throw new Error('Рецепт не найден или недоступен.');
+  const value={recipe:rows[0],timing};if(sessionEpoch===epoch)cache.set(id,value);return value;
+ }).finally(()=>{if(pending.get(id)===promise)pending.delete(id);});
+ pending.set(id,promise);return promise;
 }
 async function openRecipe(row){
- if(!token)return;
- const sessionEpoch=epoch,requestId=++detailRequest;
- $('detailTitle').textContent=row.title||'Без названия';$('detailBody').replaceChildren();
- $('detailStatus').textContent='Загрузка полного рецепта…';$('detail').showModal();
+ if(!token)return;const sessionEpoch=epoch,requestId=++detailRequest;
+ $('detailTitle').textContent=row.title||'Без названия';$('detailBody').replaceChildren();$('detailStatus').textContent='Загрузка текстовых полей…';if(!$('detail').open)$('detail').showModal();
+ const fromCache=cache.has(row.id);
  try{
-  const query=new URLSearchParams({select:'*',id:'eq.'+row.id,limit:'1'});
-  const rows=await request('/rest/v1/recipes?'+query,{headers:{apikey:key,Authorization:'Bearer '+token}});
+  const value=fromCache?cache.get(row.id):await loadRecipe(row.id);
   if(sessionEpoch!==epoch||requestId!==detailRequest||!$('detail').open)return;
-  if(!Array.isArray(rows)||!rows.length)throw new Error('Рецепт не найден или недоступен для этой учётной записи.');
-  const r=rows[0];$('detailTitle').textContent=r.title||'Без названия';
-  section('Категория',r.category);
-  section('Время приготовления',r.cooking_time==null?null:r.cooking_time+' мин.');
-  section('Порций',r.servings);section('Описание',r.description);
-  section('Ингредиенты',r.ingredients);section('Приготовление',r.steps);
-  section('Личная заметка',r.notes);section('Источник',r.source_url);
-  $('detailStatus').textContent='Рецепт загружен. Только просмотр.';
+  const start=performance.now();render(value.recipe);const renderTime=performance.now()-start,t=value.timing;
+  $('detailStatus').textContent=(fromCache?'Из памяти страницы — без запроса к серверу.':'Получено из Supabase.\nДо заголовков: '+seconds(t.headers)+'; чтение тела: '+seconds(t.body)+'; разбор JSON: '+seconds(t.parse)+'; запрос всего: '+seconds(t.total)+'.')+'\nПостроение текста: '+seconds(renderTime)+'. Только просмотр.';
  }catch(error){if(sessionEpoch===epoch&&requestId===detailRequest&&$('detail').open)$('detailStatus').textContent='Не удалось открыть рецепт: '+error.message;}
 }
 $('close').addEventListener('click',()=>$('detail').close());
 $('detail').addEventListener('close',()=>{detailRequest++;$('detailBody').replaceChildren();$('detailTitle').textContent='Рецепт';$('detailStatus').textContent='';});
 $('login').addEventListener('submit',async event=>{
- event.preventDefault();$('submit').disabled=true;let stage='Вход';token=null;epoch++;
- $('result').hidden=true;$('recipes').replaceChildren();status('Проверяем вход в Supabase…');
+ event.preventDefault();$('submit').disabled=true;reset();let stage='Вход';$('result').hidden=true;$('recipes').replaceChildren();status('Проверяем вход в Supabase…');
  try{
   const auth=await request('/auth/v1/token?grant_type=password',{method:'POST',headers:{apikey:key,'Content-Type':'application/json'},body:JSON.stringify({email:$('email').value.trim(),password:$('password').value})});
   $('password').value='';if(!auth?.access_token)throw new Error('В ответе нет токена доступа.');token=auth.access_token;
-  stage='Чтение рецептов';status('Вход выполнен. Читаем до 50 названий…');
-  const rows=await request('/rest/v1/recipes?select=id,title&order=updated_at.desc&limit=50',{headers:{apikey:key,Authorization:'Bearer '+token}});
+  stage='Чтение рецептов';status('Вход выполнен. Читаем до 50 названий…');const timing={};
+  const rows=await request('/rest/v1/recipes?select=id,title&order=updated_at.desc&limit=50',{headers:{apikey:key,Authorization:'Bearer '+token}},timing);
   if(!Array.isArray(rows))throw new Error('Ожидался список рецептов.');
-  for(const row of rows){
-   const li=document.createElement('li'),card=document.createElement('article'),heading=document.createElement('h3'),button=document.createElement('button');
-   heading.textContent=row.title||'Без названия';button.type='button';button.textContent='Открыть рецепт';
-   button.addEventListener('click',()=>openRecipe(row));card.append(heading,button);li.append(card);$('recipes').append(li);
-  }
-  $('summary').textContent=rows.length?'Показано: '+rows.length+' (до 50 в этом тесте). Нажмите «Открыть рецепт» для полного текста.':'Запрос выполнен, но доступных рецептов не получено. Это не доказывает отсутствие данных в базе.';
-  $('result').hidden=false;$('login').hidden=true;status('Карточки загружены. Просмотр рецептов не изменяет данные.');
- }catch(error){token=null;status(stage+': '+error.message+'\nПароль и токен присылать не нужно.');}
+  for(const row of rows){const li=document.createElement('li'),card=document.createElement('article'),heading=document.createElement('h3'),button=document.createElement('button');heading.textContent=row.title||'Без названия';button.type='button';button.textContent='Открыть рецепт';button.addEventListener('click',()=>openRecipe(row));card.append(heading,button);li.append(card);$('recipes').append(li);}
+  $('summary').textContent=rows.length?'Показано: '+rows.length+' (до 50). Повторно открытые рецепты берутся из памяти до выхода или перезагрузки.':'Доступных рецептов не получено. Это не доказывает отсутствие данных в базе.';
+  $('result').hidden=false;$('login').hidden=true;status('Список: до заголовков '+seconds(timing.headers)+', чтение тела '+seconds(timing.body)+', всего '+seconds(timing.total)+'. Данные не изменялись.');
+ }catch(error){reset();status(stage+': '+error.message+'\nПароль и токен присылать не нужно.');}
  finally{$('password').value='';$('submit').disabled=false;}
 });
-$('logout').addEventListener('click',()=>{
- token=null;epoch++;if($('detail').open)$('detail').close();$('recipes').replaceChildren();$('result').hidden=true;$('login').hidden=false;
- status('Локальная тестовая сессия закрыта. Для продолжения войдите снова.');
-});
-status('Версия 2: карточки и полный текст. HTML и JavaScript загружены. Введите существующие данные входа.');
+$('logout').addEventListener('click',()=>{reset();if($('detail').open)$('detail').close();$('recipes').replaceChildren();$('result').hidden=true;$('login').hidden=false;status('Сессия закрыта. Токен и кэш рецептов удалены из памяти страницы.');});
+status('Версия 3 готова. Введите существующие данные входа.');
 </script>
 </html>
